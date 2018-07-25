@@ -1,175 +1,213 @@
 #include <stdio.h>
+#include <sys/types.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
-#include <string.h>
-#include <arpa/inet.h>
-#include <stdlib.h>
 #include <sys/stat.h>
-#include <sys/types.h>
-#include <fcntl.h>
+#include <errno.h>
 #include <unistd.h>
-
-struct sockaddr_in sockaddr1;
-int sockfd;
-char ipaddr[15];
+#include <fcntl.h>
+#include <string.h>
 
 #define port 3333
+ 
+#include <stdlib.h>
+#include <arpa/inet.h>
 
-void clink()
-{
-	/*1. create socket*/
-	sockfd = socket(AF_INET, SOCK_STREAM, 0);
-	
-	/*2. init addr*/
-	memset(&sockaddr1, 0, sizeof(sockaddr1));
+int  sockclient;
+struct sockaddr_in sockaddr1;
+char ipaddr[15];
+
+
+int linkS() 
+{	
+	if((sockclient=socket(AF_INET,SOCK_STREAM,0))==-1)
+	{
+	    perror("socket");	
+	    exit(0);
+	}
+		
+	memset(&sockaddr1,0,sizeof(sockaddr1));
 	sockaddr1.sin_family = AF_INET;
 	sockaddr1.sin_addr.s_addr = inet_addr(ipaddr);
 	sockaddr1.sin_port = htons(port);
+	
+	if(connect(sockclient,(struct sockaddr* )&sockaddr1,sizeof(sockaddr1))==-1)
+	{
+	    perror("connect");
+	    exit(0);
+	}
 
-	/*3. connect to server*/
-	connect(sockfd, (struct sockaddr *)&sockaddr1, sizeof(sockaddr1));
+	return 1;
 }
 
+//~~~~~~~~~~~~~~~~~~~~~~~上传文件~~~~~~~~~~~~~~~~~~~~~~~~~
 void upload_file(char *filename)
-{
-	char cmd = 'U';
-	int size = strlen(filename);
-	struct stat fstat;
+{	
 	int fd;
 	char buf[1024];
-	int count;
+	int count=0;
+	int size = strlen(filename);
+	char cmd = 'U';
 
-	fd = open(filename, O_RDONLY);
-
-	//send operationtype
-	write(sockfd, &cmd, 1);
-
-	//send file name
-	write(sockfd, &size, 4 );
-	write(sockfd, filename, size);
-
-	//send file length
-	stat(filename, &fstat);
-	write(sockfd, (void *)(fstat.st_size), 4);
-
-	//send file content
-	while((count = read(fd, (void *)buf, 1024)) > 0){
-		write(sockfd, &buf, count);	
+	struct stat fstat;
+		
+	if((fd=open(filename,O_RDONLY))==-1)
+	{
+		perror("open: ");
+		return;
 	}
 	
+	/*发送上传命令*/
+	write(sockclient,&cmd,1);
+	
+	/*发送文件名*/
+	write(sockclient,(void *)&size,4);
+	write(sockclient,filename,size);
+	
+	/*发送文件长度*/
+	if(stat(filename,&fstat)==-1)
+		return;
+	
+	write(sockclient,(void *)&(fstat.st_size),4);
+	
+	/*发送文件内容*/
+	while((count=read(fd,(void *)buf,1024))>0)
+	{
+		write(sockclient,&buf,count);	
+	}		
+	
 	close(fd);
+
 }
+//~~~~~~~~~~~~~~~~~~~~~~~下载文件~~~~~~~~~~~~~~~~~~~~~~~~~
 
 void download_file(char *filename)
 {
-	char cmd = 'U';
-	int size = strlen(filename);
 	int fd;
 	char buf[1024];
-	int count = 0;
-	int filesize;
-	int tmpsize;
-	//1. send operationtype
-	write(sockfd, (void *)&cmd, 1);
-
-	//2. send file name
-	write(sockfd, &size, 4);
-	write(sockfd, filename, size);
+	int count=0;
+	int filesize = 0;
+	int tmpsize = 0;
+	int namesize = 0;
+	char cmd = 'D';
 	
-	//2.1 create file
-	open(filename, O_RDWR|O_CREAT, 0777);
-
-	//3. receive file length
-	read(sockfd,&filesize, 4);
+	int size = strlen(filename);
 	
-	printf("filesize %d\r\n", filesize);
-	//4. receive file content
-	while ((count = read(sockfd, (void *)buf, 1024)) > 0){
-		write(fd, &buf, count);
+	/*发送下载命令*/
+	write(sockclient,(void *)&cmd,1);
+	
+	/*发送文件名*/
+	write(sockclient,&size,4);
+	write(sockclient,filename,size);
+	
+	/*创建文件*/
+	if((fd=open(filename,O_RDWR|O_CREAT,0777))<0)
+	{
+		perror("open error:\n");	
+	}
+	
+	/*接收文件长度*/
+	read(sockclient,&filesize,4);	
+
+	while((count=read(sockclient,(void *)buf,1024))>0)
+	{
+		write(fd,&buf,count);
 		tmpsize += count;
+		if(tmpsize==filesize)
+			break;	
 
-		printf("tmpsize %d\r\n", tmpsize);
-
-		if (tmpsize == filesize){
-			break;
-		}
-
-	close(fd);
-
-		
-	}	
+	}
+	
+	close(fd);	
 }
 
-void quit(){
+
+void quit()
+{
 	char cmd = 'Q';
-
-	//1. send quit operationcode
-	write(sockfd, &cmd, 1);
-	//2. clear screen
+	
+	write(sockclient,(void *)&cmd,1);
+	
 	system("clear");
-
-	//3. exit
-	exit(0);
+				
+	exit(0);	
 }
-void menu(void)
+
+void menu()
 {
 	char command;
 	char file_u[30];
 	char file_d[30];
+	char tmp;
 	char c;
-
-	while (1)
+	
+	while(1)
 	{
-		printf("\n-------------------------1.Upload file-------------------------------");
-		printf("\n-------------------------2.Download file-----------------------------");
-		printf("\n-------------------------3.Exit--------------------------------------");
-		printf("\n Please input the command:");
+		printf("\n------------------------------  1.Upload Files  ------------------------------\n");
+		printf("------------------------------  2.Download Files  ------------------------------\n");
+		printf("------------------------------      3.Exit   ------------------------------------\n");
+		printf("Please input the Client command:");	
 
-		command = getchar();
-
-		switch (command){
+		command=getchar();
+		
+		switch(command)
+		{
 			case '1':
-				printf("please input file name:");
-				while ((c = getchar()) != '\n' && c != EOF);
-				fgets(file_u, 30, stdin);
-				file_u[strlen(file_u)-1] = '\0';
-				upload_file(file_u);
-			//ipload
-				break;
+			{
+					printf("Upload File:");
+					
+					while ((c=getchar()) != '\n' && c != EOF);
+					
+					fgets(file_u,30,stdin);
+					
+					file_u[strlen(file_u)-1]='\0';
+
+					upload_file(file_u);
+		  	}
+			break;
+				
 			case '2':
-			//download
-				printf("Please input file name:");
-//				while((c = getchar()) != '\n' && c != EOF);
-				fgets(file_d, 30, stdin);
-				file_d[strlen(file_d) - 1] = '\0';
-				download_file(file_d);
+				{
+					printf("Download Files:");
+					
+					while ((c=getchar()) != '\n' && c != EOF);
+					
+					fgets(file_d,sizeof(file_d),stdin);
+					
+					file_d[strlen(file_d)-1]='\0';
+					
+					download_file(file_d);
+			  	}
 				break;
+				
 			case '3':
-				//exit
+				quit();
+				
 				break;
+			
 			default:
-				printf("Please input the right command\n");
+				printf("Please input right command\n");
 				break;
 		}
 	}
 }
 
-int main(int argc, char **argv)
+
+int main(int argc,char *args[])
 {
-	if (argc != 2){
-		printf("usage ./client xxx.xxx.xxx.xxx(xxx:0-255)");
-		exit(0);
-	}
-
+    if(argc!=2)
+    {
+	    printf("format error: you mast enter ipaddr like this : client 192.168.0.6\n");
+	    exit(0);
+    }
+    
+    strcpy(ipaddr,args[1]); 
 	
-	strcpy(ipaddr, argv[1]);
-	/*1. Establish link*/
-	clink();
-
-	/*2.implement upload download and menu function*/
-	menu();
-	/*3.close link*/
-	close(sockfd);
-
-	return 0;
+    linkS();
+    
+    menu();
+    
+    close(sockclient);
+    
+    return 0;
 }
